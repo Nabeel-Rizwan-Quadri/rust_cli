@@ -13,65 +13,34 @@ pub struct Mycli {
 
 #[derive(Debug, Subcommand)]
 pub enum EntityType {
-    /// Manage users
-    User(UserCommand),
-    /// Manage projects
-    Project(ProjectCommand),
+    /// Manage mycli
+    Mycli(MycliCommand),
 }
 
 #[derive(Debug, Args)]
-pub struct UserCommand {
+pub struct MycliCommand {
     #[clap(subcommand)]
-    pub command: UserSubcommand,
+    pub command: MycliSubcommand,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum UserSubcommand {
-    Run,
-    /// Create a new user
+pub enum MycliSubcommand {
+    Server,
+    Client(CreateClient),
+    /// Create a new mycli user
     Create(CreateUser),
-    /// Delete an existing user
-    Delete(DeleteUser),
-    /// List all users
-    List,
+}
+
+#[derive(Debug, Args)]
+pub struct CreateClient {
+    /// Address of the server to connect to
+    pub arraydata: Vec<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct CreateUser {
-    /// Username for the new user
+    /// Username for the new mycli user
     pub username: String,
-    /// Email for the new user
+    /// Email for the new mycli user
     pub email: String,
-}
-
-#[derive(Debug, Args)]
-pub struct DeleteUser {
-    /// Username of the user to delete
-    pub username: String,
-}
-
-#[derive(Debug, Args)]
-pub struct ProjectCommand {
-    #[clap(subcommand)]
-    pub command: ProjectSubcommand,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum ProjectSubcommand {
-    /// Create a new project
-    Create(CreateProject),
-    /// Delete an existing project
-    Delete(DeleteProject),
-}
-
-#[derive(Debug, Args)]
-pub struct CreateProject {
-    /// Name for the new project
-    pub name: String,
-}
-
-#[derive(Debug, Args)]
-pub struct DeleteProject {
-    /// Name of the project to delete
-    pub name: String,
 }
