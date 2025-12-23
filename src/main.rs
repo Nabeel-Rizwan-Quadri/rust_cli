@@ -8,6 +8,71 @@ use tokio::net::UnixListener;
 
 use std::fs;
 
+mod ui;
+
+use color_eyre::Result;
+use crossterm::event::{self, Event};
+use ratatui::DefaultTerminal;
+
+// ClientData struct for sharing data between async handlers and UI
+#[derive(Debug, Clone)]
+pub struct ClientData {
+    entries: Vec<(String, u64)>,
+    last_updated: std::time::SystemTime,
+}
+
+impl ClientData {
+    fn new() -> Self {
+        ClientData {
+            entries: vec![],
+            last_updated: std::time::SystemTime::now(),
+        }
+    }
+
+    fn from_string(data: &str) -> Result<Self, String> {
+        let tokens: Vec<&str> = data.trim().split_whitespace().collect();
+
+        if tokens.is_empty() {
+            return Err("Empty data".to_string());
+        }
+
+        if tokens.len() % 2 != 0 {
+            return Err("Odd number of tokens, expected key-value pairs".to_string());
+        }
+
+        let mut entries = Vec::new();
+        for chunk in tokens.chunks(2) {
+            if chunk.len() == 2 {
+                let key = chunk[0].to_string();
+                let value: u64 = chunk[1].parse()
+                    .map_err(|_| format!("Invalid number: {}", chunk[1]))?;
+                entries.push((key, value));
+            }
+        }
+
+        Ok(ClientData {
+            entries,
+            last_updated: std::time::SystemTime::now(),
+        })
+    }
+
+    fn as_vec(&self) -> Vec<(&str, u64)> {
+        self.entries.iter()
+            .map(|(k, v)| (k.as_str(), *v))
+            .collect()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+// Thread-safe shared state for client data
+static CLIENT_DATA: Mutex<ClientData> = Mutex::new(ClientData {
+    entries: vec![],
+    last_updated: std::time::UNIX_EPOCH,
+});
+
 // Simple in-memory storage for demonstration
 // In a real application, you would use a database
 static MYCLITEMS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
@@ -34,14 +99,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Connect to the server listener
                 let mut stream = UnixStream::connect(socket_path).await?;
                 println!("Connected to server!");
-
-                // Ensure in-memory storage is initialized
-                {
-                    let mut mycli_items = MYCLITEMS.lock().unwrap();
-                    if mycli_items.is_none() {
-                        *mycli_items = Some(HashMap::new());
-                    }
-                }
 
                 // Extract user input from the create_client struct (arraydata)
                 let arraydata = create_client.arraydata.clone();
@@ -78,22 +135,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let listener = UnixListener::bind(socket_path).unwrap();
                 println!("Listening on {socket_path}");
 
-                loop {
-                    match listener.accept().await {
-                        Ok((stream, _addr)) => {
-                            println!("new client!");
-                            tokio::spawn(handle_client(stream));
+                // Initialize UI ONCE at startup
+                color_eyre::install()?;
+                let terminal = ratatui::init();
 
-                            // {
-                            //     let mut mycli_items = MYCLITEMS.lock().unwrap();
-                            //     if mycli_items.is_none() {
-                            //         *mycli_items = Some(HashMap::new());
-                            //     }
-                            // }
+                // Spawn listener as background task
+                let listener_handle = tokio::spawn(async move {
+                    loop {
+                        match listener.accept().await {
+                            Ok((stream, _addr)) => {
+                                println!("new client!");
+                                tokio::spawn(handle_client(stream));
+                            }
+                            Err(e) => eprintln!("accept error: {e}"),
                         }
-                        Err(e) => eprintln!("accept error: {e}"),
                     }
-                }
+                });
+
+                // Run UI in main task
+                let ui_result = run(terminal).await;
+                ratatui::restore();
+
+                // Clean up listener
+                listener_handle.abort();
+                ui_result?;
             }
         },
     }
@@ -125,18 +190,42 @@ async fn handle_client(mut stream: tokio::net::UnixStream) -> tokio::io::Result<
                 return Ok(());
             }
             Ok(n) => {
-                let data = &buf[..n];
-                println!("Received from client: {}", String::from_utf8_lossy(data));
-                // Echo a simple acknowledgment back to the client
-                stream.write_all(b"ack\n").await?;
-                // Send another message and flush
-                stream.write_all(b"hello from tokio server\n").await?;
+                let data_str = String::from_utf8_lossy(&buf[..n]);
+                println!("Received from client: {}", data_str);
+
+                // Parse and store client data
+                match ClientData::from_string(&data_str) {
+                    Ok(client_data) => {
+                        println!("Parsed data: {:?}", client_data);
+                        *CLIENT_DATA.lock().unwrap() = client_data;
+                        stream.write_all(b"ack\n").await?;
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Parse error: {}", e);
+                        eprintln!("{}", error_msg);
+                        stream.write_all(b"err: invalid format\n").await?;
+                    }
+                }
                 stream.flush().await?;
-                println!("Message sent!");
             }
             Err(e) => {
                 eprintln!("Failed to read from client: {}", e);
                 return Err(e);
+            }
+        }
+    }
+}
+
+async fn run(mut terminal: DefaultTerminal) -> Result<()> {
+    use std::time::Duration;
+
+    loop {
+        terminal.draw(ui::render)?;
+
+        // Poll with 100ms timeout for real-time updates
+        if event::poll(Duration::from_millis(100))? {
+            if matches!(event::read()?, Event::Key(_)) {
+                break Ok(());
             }
         }
     }
