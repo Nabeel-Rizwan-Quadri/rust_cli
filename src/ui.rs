@@ -1,16 +1,17 @@
-use ratatui::{Frame, layout::{Constraint, Direction, Layout}, style::{Color, Style, Stylize}, text::ToSpan, widgets::{BarChart, Block, Borders, Widget}};
+use ratatui::{
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Style, Stylize},
+    text::Line,
+    widgets::{BarChart, Block, Borders, Paragraph, Widget, Wrap},
+    Frame,
+};
 
 pub fn render(frame: &mut Frame) {
-    let outer_layout = Layout::default()
-        .direction(Direction::Horizontal)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
         .margin(1)
-        .constraints(vec![Constraint::Min(1)])
-        .split(frame.area());
-
-    Block::bordered()
-        .fg(Color::Green)
-        .title(" My Blocky Boy ".to_span().into_centered_line())
-        .render(outer_layout[0], frame.buffer_mut());
+        .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
+        .split(frame.size());
 
     // Read from shared CLIENT_DATA
     let client_data = crate::CLIENT_DATA.lock().unwrap();
@@ -23,13 +24,28 @@ pub fn render(frame: &mut Frame) {
     };
 
     let barchart = BarChart::default()
-        .block(Block::default()
-            .title("Bar Chart - Real-time Client Data")
-            .borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title("Bar Chart - Real-time Client Data")
+                .borders(Borders::ALL),
+        )
         .data(&data)
         .bar_width(5)
         .bar_style(Style::default().fg(Color::Yellow))
         .value_style(Style::default().fg(Color::Black).bg(Color::Yellow));
 
-    frame.render_widget(barchart, outer_layout[0]);
+    frame.render_widget(barchart, chunks[0]);
+
+    // Store height for scroll calculation
+    *crate::LOG_VIEW_HEIGHT.lock().unwrap() = chunks[1].height;
+
+    let server_logs = crate::SERVER_LOGS.lock().unwrap();
+    let log_lines: Vec<Line> = server_logs.iter().map(|s| Line::from(s.clone())).collect();
+    let scroll = *crate::SCROLL_STATE.lock().unwrap();
+    let log_paragraph = Paragraph::new(log_lines)
+        .block(Block::default().title("Server Logs").borders(Borders::ALL))
+        .wrap(Wrap { trim: true })
+        .scroll(scroll);
+
+    frame.render_widget(log_paragraph, chunks[1]);
 }

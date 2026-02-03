@@ -73,6 +73,11 @@ static CLIENT_DATA: Mutex<ClientData> = Mutex::new(ClientData {
     last_updated: std::time::UNIX_EPOCH,
 });
 
+// Thread-safe shared state for server logs
+pub static SERVER_LOGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+pub static LOG_VIEW_HEIGHT: Mutex<u16> = Mutex::new(0);
+pub static SCROLL_STATE: Mutex<(u16, u16)> = Mutex::new((0, 0));
+
 // Simple in-memory storage for demonstration
 // In a real application, you would use a database
 static MYCLITEMS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
@@ -98,11 +103,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Connect to the server listener
                 let mut stream = UnixStream::connect(socket_path).await?;
-                println!("Connected to server!");
+                // println!("Connected to server!");
 
                 // Extract user input from the create_client struct (arraydata)
                 let arraydata = create_client.arraydata.clone();
-                println!("create_client.arraydata = {:?}", arraydata);
+                // println!("create_client.arraydata = {:?}", arraydata);
 
                 // Build a single message from the array (join with spaces)
                 // This can be sent to the server later
@@ -115,14 +120,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // ---- Send a message ----
                 stream.write_all(client_message.as_bytes()).await?;
                 stream.flush().await?;
-                println!("Message sent!");
+                // println!("Message sent!");
 
                 // ---- Optional: read response from server ----
                 loop {
                     let mut buf = vec![0u8; 1024];
                     let n = stream.read(&mut buf).await?;
                     if n > 0 {
-                        println!("Received response: {}", String::from_utf8_lossy(&buf[..n]));
+                        // println!("Received response: {}", String::from_utf8_lossy(&buf[..n]));
                     }
                 }
             }
@@ -133,7 +138,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = fs::remove_file(socket_path);
 
                 let listener = UnixListener::bind(socket_path).unwrap();
-                println!("Listening on {socket_path}");
+                SERVER_LOGS
+                    .lock()
+                    .unwrap()
+                    .push(format!("Listening on {}", socket_path));
 
                 // Initialize UI ONCE at startup
                 color_eyre::install()?;
@@ -144,7 +152,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     loop {
                         match listener.accept().await {
                             Ok((stream, _addr)) => {
-                                println!("new client!");
                                 tokio::spawn(handle_client(stream));
                             }
                             Err(e) => eprintln!("accept error: {e}"),
@@ -185,18 +192,29 @@ async fn handle_client(mut stream: tokio::net::UnixStream) -> tokio::io::Result<
     loop {
         match stream.read(&mut buf).await {
             Ok(0) => {
+                SERVER_LOGS
+                    .lock()
+                    .unwrap()
+                    .push(format!("Client Disconnected"));
                 // client disconnected
-                println!("Client disconnected");
+                // println!("Client disconnected");
                 return Ok(());
             }
             Ok(n) => {
+                SERVER_LOGS
+                    .lock()
+                    .unwrap()
+                    .push(format!("Client connected"));
                 let data_str = String::from_utf8_lossy(&buf[..n]);
-                println!("Received from client: {}", data_str);
+                SERVER_LOGS
+                    .lock()
+                    .unwrap()
+                    .push(format!("Received from client: {}", data_str.trim()));
 
                 // Parse and store client data
                 match ClientData::from_string(&data_str) {
                     Ok(client_data) => {
-                        println!("Parsed data: {:?}", client_data);
+                        // println!("Parsed data: {:?}", client_data);
                         *CLIENT_DATA.lock().unwrap() = client_data;
                         stream.write_all(b"ack\n").await?;
                     }
@@ -209,6 +227,10 @@ async fn handle_client(mut stream: tokio::net::UnixStream) -> tokio::io::Result<
                 stream.flush().await?;
             }
             Err(e) => {
+                SERVER_LOGS
+                    .lock()
+                    .unwrap()
+                    .push(format!("Failed to read from client"));
                 eprintln!("Failed to read from client: {}", e);
                 return Err(e);
             }
@@ -217,15 +239,30 @@ async fn handle_client(mut stream: tokio::net::UnixStream) -> tokio::io::Result<
 }
 
 async fn run(mut terminal: DefaultTerminal) -> Result<()> {
+    use crossterm::event::KeyCode;
     use std::time::Duration;
 
     loop {
         terminal.draw(ui::render)?;
 
-        // Poll with 100ms timeout for real-time updates
         if event::poll(Duration::from_millis(100))? {
-            if matches!(event::read()?, Event::Key(_)) {
-                break Ok(());
+            if let Event::Key(key) = event::read()? {
+                match key.code {
+                    KeyCode::Char('q') => break Ok(()),
+                    KeyCode::Up => {
+                        let mut scroll = SCROLL_STATE.lock().unwrap();
+                        scroll.0 = scroll.0.saturating_sub(1);
+                    }
+                    KeyCode::Down => {
+                        let mut scroll = SCROLL_STATE.lock().unwrap();
+                        let num_log_lines = SERVER_LOGS.lock().unwrap().len() as u16;
+                        let view_height = *LOG_VIEW_HEIGHT.lock().unwrap();
+                        if scroll.0 < num_log_lines.saturating_sub(view_height.saturating_sub(2)) {
+                            scroll.0 = scroll.0.saturating_add(1);
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
     }

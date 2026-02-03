@@ -1,5 +1,10 @@
 # MyCLI Project Overview
 
+## Run From CMD
+1. Open Command Prompt and `cd` into the repository folder (for example `cd C:\path\to\mycli`).
+2. Start the server: `cargo run -- mycli server` (leave this running; it hosts `/tmp/mycli_data.sock`).
+3. In another CMD window, run clients as `cargo run -- mycli client <label> <value> [<label> <value> ...]` where `<label>` is any string (no spaces) and `<value>` is an unsigned integer. You must provide complete label/value pairs—for example `cargo run -- mycli client apples 10 oranges 5`. If the input cannot be grouped into pairs or any value is non-numeric, the server responds with `err: invalid format`.
+
 ## Project Summary
 MyCLI is a Rust-based command-line application that implements a client-server architecture using Unix domain sockets for inter-process communication, with a terminal-based user interface.
 
